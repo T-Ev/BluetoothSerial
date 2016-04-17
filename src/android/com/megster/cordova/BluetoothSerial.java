@@ -54,6 +54,9 @@ public class BluetoothSerial extends CordovaPlugin {
     private static final String SET_NAME = "setName";
     private static final String SET_DISCOVERABLE = "setDiscoverable";
 
+	// Add support for readRSSI
+	private static final String READ_RSSI = "readRSSI";
+
     // callbacks
     private CallbackContext connectCallback;
     private CallbackContext dataAvailableCallback;
@@ -76,9 +79,19 @@ public class BluetoothSerial extends CordovaPlugin {
     public static final int MESSAGE_TOAST = 5;
     public static final int MESSAGE_READ_RAW = 6;
 
+    public static final int MESSAGE_DEVICE_ADDRESS = 7;
+
+    // Device types
+    public static final int DEVICE_TYPE_UNKNOWN = 0;
+    public static final int DEVICE_TYPE_CLASSIC = 1;
+    public static final int DEVICE_TYPE_LE = 2;
+    public static final int DEVICE_TYPE_DUAL = 3;
+
     // Key names received from the BluetoothChatService Handler
     public static final String DEVICE_NAME = "device_name";
     public static final String TOAST = "toast";
+
+    public static final String DEVICE_ADDRESS = "device_address";
 
     StringBuffer buffer = new StringBuffer();
     private String delimiter;
@@ -88,6 +101,13 @@ public class BluetoothSerial extends CordovaPlugin {
     private static final String ACCESS_COARSE_LOCATION = Manifest.permission.ACCESS_COARSE_LOCATION;
     private static final int CHECK_PERMISSIONS_REQ_CODE = 2;
     private CallbackContext permissionCallback;
+
+    // ???
+    //private static final int REQUEST_CONNECT_DEVICE = 1;
+    //private static final int REQUEST_ENABLE_BT = 2;
+
+    private String mConnectedName = null;
+    private String mConnectedAddress = null;
 
     @Override
     public boolean execute(String action, CordovaArgs args, CallbackContext callbackContext) throws JSONException {
@@ -241,6 +261,11 @@ public class BluetoothSerial extends CordovaPlugin {
             discoverIntent.putExtra(BluetoothAdapter.EXTRA_DISCOVERABLE_DURATION, discoverableDuration);
             cordova.getActivity().startActivity(discoverIntent);
 
+        } else if (action.equals(READ_RSSI)) {
+
+            boolean secure = true;
+            readRssi(args, secure, callbackContext);
+
         } else {
             validAction = false;
 
@@ -300,8 +325,9 @@ public class BluetoothSerial extends CordovaPlugin {
                 String action = intent.getAction();
                 if (BluetoothDevice.ACTION_FOUND.equals(action)) {
                     BluetoothDevice device = intent.getParcelableExtra(BluetoothDevice.EXTRA_DEVICE);
+					short rssi = intent.getShortExtra(BluetoothDevice.EXTRA_RSSI, Short.MIN_VALUE);
                     try {
-                    	JSONObject o = deviceToJSON(device);
+                    	JSONObject o = deviceToJSON(device, rssi);
                         unpairedDevices.put(o);
                         if (ddc != null) {
                             PluginResult res = new PluginResult(PluginResult.Status.OK, o);
@@ -315,6 +341,7 @@ public class BluetoothSerial extends CordovaPlugin {
                 } else if (BluetoothAdapter.ACTION_DISCOVERY_FINISHED.equals(action)) {
                     callbackContext.success(unpairedDevices);
                     cordova.getActivity().unregisterReceiver(this);
+                    bluetoothAdapter.cancelDiscovery();
                 }
             }
         };
@@ -326,17 +353,93 @@ public class BluetoothSerial extends CordovaPlugin {
     }
 
     private JSONObject deviceToJSON(BluetoothDevice device) throws JSONException {
+        return deviceToJSON(device, (short)0);
+    }
+
+    private JSONObject deviceToJSON(BluetoothDevice device, short rssi) throws JSONException {
         JSONObject json = new JSONObject();
+        String deviceType;
+        switch (device.getType())
+        {
+            case DEVICE_TYPE_CLASSIC: deviceType = "Classic";
+                break;
+            case DEVICE_TYPE_LE: deviceType = "BLE";
+                break;
+            case DEVICE_TYPE_DUAL: deviceType = "Dual";
+                break;
+            default: deviceType = "Unknown";
+                break;
+        }
+
         json.put("name", device.getName());
         json.put("address", device.getAddress());
         json.put("id", device.getAddress());
+		json.put("type", deviceType);
         if (device.getBluetoothClass() != null) {
-            json.put("class", device.getBluetoothClass().getDeviceClass());
+            json.put("classMajor", device.getBluetoothClass().getMajorDeviceClass());
+            json.put("classMinor", device.getBluetoothClass().getDeviceClass());
         }
+        json.put("rssi", Integer.toString((int)rssi, 10));
         return json;
     }
 
+    private void readRssi(CordovaArgs args, boolean secure, final CallbackContext callbackContext) throws JSONException {
+        String macAddress = null;
+        BluetoothDevice device = null;
+
+        if (args.isNull(0)) {
+            if (mConnectedAddress != null) {
+                Set<BluetoothDevice> bondedDevices = bluetoothAdapter.getBondedDevices();
+                for (BluetoothDevice deviceBT : bondedDevices) {
+                    if (mConnectedAddress.equals(deviceBT.getAddress())) {
+                        macAddress = deviceBT.getAddress();
+                        device = deviceBT;
+                    }
+                }
+            } else
+                callbackContext.error("Read RSSI devices not connected");
+        } else {
+            macAddress = args.getString(0);
+            device = bluetoothAdapter.getRemoteDevice(macAddress);
+        }
+
+        final BroadcastReceiver connectReceiver = new BroadcastReceiver() {
+
+            private JSONArray rssiDevices = new JSONArray();
+
+            @Override
+            public void onReceive(Context context, Intent intent) {
+                String action = intent.getAction();
+                if (BluetoothDevice.ACTION_ACL_CONNECTED.equals(action)) {
+                    BluetoothDevice deviceBT = intent.getParcelableExtra(BluetoothDevice.EXTRA_DEVICE);
+                    // Doesn't seem to work... always returns -32768 for RSSI
+					short rssi = intent.getShortExtra(BluetoothDevice.EXTRA_RSSI, Short.MIN_VALUE);
+                    try {
+                    	JSONObject o = deviceToJSON(deviceBT, rssi);
+                        rssiDevices.put(o);
+                    } catch (JSONException e) {
+                        // This shouldn't happen, log and ignore
+                        Log.e(TAG, "Problem converting device to JSON", e);
+                    }
+                    callbackContext.success(rssiDevices);
+                    cordova.getActivity().unregisterReceiver(this);
+                }
+            }
+        };
+
+        Activity activity = cordova.getActivity();
+        activity.registerReceiver(connectReceiver, new IntentFilter(BluetoothDevice.ACTION_ACL_CONNECTED));
+
+        if (device != null) {
+            connectCallback = callbackContext;
+            bluetoothSerialService.connect(device, secure);
+        } else {
+            callbackContext.error("Read RSSI could not connect to " + macAddress);
+        }
+    }
+
     private void connect(CordovaArgs args, boolean secure, CallbackContext callbackContext) throws JSONException {
+
         String macAddress = args.getString(0);
         BluetoothDevice device = bluetoothAdapter.getRemoteDevice(macAddress);
 
@@ -390,6 +493,8 @@ public class BluetoothSerial extends CordovaPlugin {
                             break;
                         case BluetoothSerialService.STATE_NONE:
                             Log.i(TAG, "BluetoothSerialService.STATE_NONE");
+                            mConnectedName = null;
+                            mConnectedAddress = null;
                             break;
                     }
                     break;
@@ -400,6 +505,11 @@ public class BluetoothSerial extends CordovaPlugin {
                     break;
                 case MESSAGE_DEVICE_NAME:
                     Log.i(TAG, msg.getData().getString(DEVICE_NAME));
+                    mConnectedName = msg.getData().getString(DEVICE_NAME);
+                    break;
+                case MESSAGE_DEVICE_ADDRESS:
+                    Log.i(TAG, msg.getData().getString(DEVICE_ADDRESS));
+                    mConnectedAddress = msg.getData().getString(DEVICE_ADDRESS);
                     break;
                 case MESSAGE_TOAST:
                     String message = msg.getData().getString(TOAST);
