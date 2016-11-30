@@ -25,6 +25,7 @@ static bool isConnected = false;
 static int rssi = 0;
 
 // TODO should have a configurable list of services
+CBUUID *microchipServiceUUID;
 CBUUID *redBearLabsServiceUUID;
 CBUUID *adafruitServiceUUID;
 CBUUID *lairdServiceUUID;
@@ -208,12 +209,16 @@ CBUUID *writeCharacteristicUUID;
     [NSTimer scheduledTimerWithTimeInterval:(float)timeout target:self selector:@selector(scanTimer:) userInfo:nil repeats:NO];
 
 #if TARGET_OS_IPHONE
+    microchipServiceUUID = [CBUUID UUIDWithString:@MICROCHIP_SERVICE_UUID];
     redBearLabsServiceUUID = [CBUUID UUIDWithString:@RBL_SERVICE_UUID];
     adafruitServiceUUID = [CBUUID UUIDWithString:@ADAFRUIT_SERVICE_UUID];
     lairdServiceUUID = [CBUUID UUIDWithString:@LAIRD_SERVICE_UUID];
     blueGigaServiceUUID = [CBUUID UUIDWithString:@BLUEGIGA_SERVICE_UUID];
-    NSArray *services = @[redBearLabsServiceUUID, adafruitServiceUUID, lairdServiceUUID, blueGigaServiceUUID];
-    [self.CM scanForPeripheralsWithServices:services options: nil];
+    NSArray *services = @[microchipServiceUUID, redBearLabsServiceUUID, adafruitServiceUUID, lairdServiceUUID, blueGigaServiceUUID];
+    // Doesn't work with Microchip
+    // [self.CM scanForPeripheralsWithServices:services options: nil];
+    // Look for any service instead
+    [self.CM scanForPeripheralsWithServices:nil options:nil];
 #else
     [self.CM scanForPeripheralsWithServices:nil options:nil]; // Start scanning
 #endif
@@ -525,7 +530,13 @@ static bool done = false;
         // Determine if we're connected to Red Bear Labs, Adafruit or Laird hardware
         for (CBService *service in peripheral.services) {
 
-            if ([service.UUID isEqual:redBearLabsServiceUUID]) {
+            if ([service.UUID isEqual:microchipServiceUUID]) {
+                NSLog(@"Microchip Bluetooth");
+                serialServiceUUID = microchipServiceUUID;
+                readCharacteristicUUID = [CBUUID UUIDWithString:@MICROCHIP_CHAR_TX_UUID];
+                writeCharacteristicUUID = [CBUUID UUIDWithString:@MICROCHIP_CHAR_RX_UUID];
+                break;
+            } else if ([service.UUID isEqual:redBearLabsServiceUUID]) {
                 NSLog(@"RedBearLabs Bluetooth");
                 serialServiceUUID = redBearLabsServiceUUID;
                 readCharacteristicUUID = [CBUUID UUIDWithString:@RBL_CHAR_TX_UUID];
