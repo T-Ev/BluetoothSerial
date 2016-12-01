@@ -594,7 +594,7 @@ static bool done = false;
 
 - (void)peripheral:(CBPeripheral *)peripheral didUpdateValueForCharacteristic:(CBCharacteristic *)characteristic error:(NSError *)error
 {
-    unsigned char data[20];
+    unsigned char data[512];
 
     static unsigned char buf[512];
     static int len = 0;
@@ -607,25 +607,11 @@ static bool done = false;
             data_len = characteristic.value.length;
             [characteristic.value getBytes:data length:data_len];
 
-            if (data_len == 20)
-            {
-                memcpy(&buf[len], data, 20);
-                len += data_len;
+            memcpy(&buf[len], data, data_len);
+            len += data_len;
 
-                if (len >= 64)
-                {
-                    [[self delegate] bleDidReceiveData:buf length:len];
-                    len = 0;
-                }
-            }
-            else if (data_len < 20)
-            {
-                memcpy(&buf[len], data, data_len);
-                len += data_len;
-
-                [[self delegate] bleDidReceiveData:buf length:len];
-                len = 0;
-            }
+            [[self delegate] bleDidReceiveData:buf length:len];
+            len = 0;
         }
     }
     else
